@@ -1,0 +1,6 @@
+/parent
+/child
+/*.exe
+/tests/results.json
+/__pycache__/
+/report/*.pdf
