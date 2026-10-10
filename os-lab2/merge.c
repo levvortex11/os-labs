@@ -163,6 +163,41 @@ static int read_number(const char *text, int maximum) {
     return value;
 }
 
+/* Read one signed int from stdin, separated by whitespace. */
+static int read_int(void) {
+    uint64_t value = 0;
+    int negative = 0, started = 0, digits = 0;
+    for (;;) {
+        char c;
+        ssize_t count = read(0, &c, 1);
+        if (count < 0 && errno == EINTR) continue;
+        if (count < 0) fail("Input read failed");
+        if (count == 0) {
+            if (!digits) fail("Not enough integers");
+            break;
+        }
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f') {
+            if (!started) continue;
+            if (!digits) fail("Expected digits after sign");
+            break;
+        }
+        if (!started && (c == '-' || c == '+')) {
+            negative = c == '-';
+            started = 1;
+            continue;
+        }
+        if (c < '0' || c > '9') fail("Invalid integer");
+        uint64_t limit = (uint64_t)INT_MAX + (uint64_t)negative;
+        uint64_t digit = (uint64_t)(c - '0');
+        if (value > (limit - digit) / 10) fail("Integer outside int range");
+        value = value * 10 + digit;
+        started = 1;
+        digits = 1;
+    }
+    if (negative && value == (uint64_t)INT_MAX + 1) return INT_MIN;
+    return negative ? -(int)value : (int)value;
+}
+
 static double get_time(void) {
     struct timespec t;
     if (clock_gettime(CLOCK_MONOTONIC, &t) != 0) {
@@ -183,12 +218,13 @@ static void print_array(const char *name, const int *array, int n) {
 
 int main(int argc, char **argv) {
     if (argc < 2 || argc > 4) {
-        fail("Usage: ./merge THREADS [SIZE] [random|sorted|reverse]");
+        fail("Usage: ./merge THREADS [SIZE] [random|sorted|reverse|manual]");
     }
     int threads = read_number(argv[1], 4096);
     int n = argc >= 3 ? read_number(argv[2], INT_MAX) : 5000000;
     const char *pattern = argc == 4 ? argv[3] : "random";
-    if (!equal(pattern, "random") && !equal(pattern, "sorted") && !equal(pattern, "reverse")) {
+    int manual = equal(pattern, "manual");
+    if (!equal(pattern, "random") && !equal(pattern, "sorted") && !equal(pattern, "reverse") && !manual) {
         fail("Unknown pattern");
     }
 
@@ -201,9 +237,15 @@ int main(int argc, char **argv) {
     int *parallel = memory + n;
     int *buffer = parallel + n;
 
+    if (manual) {
+        write_text(1, "Enter ");
+        print_int(1, n);
+        write_text(1, " integers separated by spaces or newlines:\n");
+    }
     uint32_t state = 42;
     for (int i = 0; i < n; ++i) {
-        if (equal(pattern, "sorted")) sequential[i] = i;
+        if (manual) sequential[i] = read_int();
+        else if (equal(pattern, "sorted")) sequential[i] = i;
         else if (equal(pattern, "reverse")) sequential[i] = n - i;
         else {
             state = state * UINT32_C(1664525) + UINT32_C(1013904223);
