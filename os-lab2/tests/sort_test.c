@@ -2,6 +2,9 @@
 #define main lab_main
 #include "../merge.c"
 #undef main
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 static int compare(const void *a, const void *b) {
     int x = *(const int *)a;
@@ -24,10 +27,10 @@ int main(void) {
             if (n > 1) { a[0] = INT_MIN; a[1] = INT_MAX; }
             memcpy(expected, a, (size_t)n * sizeof(int));
             qsort(expected, (size_t)n, sizeof(int), compare);
-            free_threads = limits[p] - 1;
+            threads_left = limits[p] - 1;
             ThreadArgs args = {a, buffer, 0, n};
             parallel_sort(&args);
-            if (memcmp(a, expected, (size_t)n * sizeof(int)) || free_threads != limits[p] - 1) return 1;
+            if (memcmp(a, expected, (size_t)n * sizeof(int)) || threads_left < 0 || threads_left > limits[p] - 1) return 1;
             free(a); free(expected); free(buffer);
             ++checks;
         }

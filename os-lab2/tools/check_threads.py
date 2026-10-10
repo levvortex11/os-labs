@@ -3,7 +3,7 @@ import subprocess
 import time
 from pathlib import Path
 
-for limit in (1, 2, 3, 4, 8):
+for limit in (1, 2, 4, 8, 12, 32, 64, 128):
     p = subprocess.Popen(['./merge', str(limit), '5000000'], stdout=subprocess.DEVNULL)
     peak = 0
     shown = False

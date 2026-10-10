@@ -1,14 +1,69 @@
+#define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <limits.h>
 #include <pthread.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <stdint.h>
+#include <sys/mman.h>
 #include <time.h>
+#include <unistd.h>
+
+/* No stdio, malloc, string conversion or random library functions. */
+static void write_text(int fd, const char *text) {
+    size_t length = 0;
+    while (text[length]) ++length;
+    while (length > 0) {
+        ssize_t done = write(fd, text, length);
+        if (done < 0 && errno == EINTR) continue;
+        if (done <= 0) _exit(1);
+        text += done;
+        length -= (size_t)done;
+    }
+}
+
+static void print_int(int fd, long long value) {
+    char text[32];
+    int position = 31;
+    text[position] = '\0';
+    uint64_t number = value < 0 ? 0 - (uint64_t)value : (uint64_t)value;
+    do {
+        text[--position] = (char)('0' + number % 10);
+        number /= 10;
+    } while (number);
+    if (value < 0) text[--position] = '-';
+    write_text(fd, text + position);
+}
+
+static void print_value(const char *name, double value) {
+    /* All measured values are nonnegative. Print six fractional digits. */
+    uint64_t scaled = (uint64_t)(value * 1000000.0 + 0.5);
+    write_text(1, name);
+    print_int(1, (long long)(scaled / 1000000));
+    write_text(1, ".");
+    uint64_t fraction = scaled % 1000000;
+    char digits[7];
+    digits[6] = '\0';
+    for (int i = 5; i >= 0; --i) {
+        digits[i] = (char)('0' + fraction % 10);
+        fraction /= 10;
+    }
+    write_text(1, digits);
+    write_text(1, "\n");
+}
+
+static void fail(const char *message) {
+    write_text(2, message);
+    write_text(2, "\n");
+    _exit(1);
+}
+
+static int equal(const char *a, const char *b) {
+    while (*a && *a == *b) { ++a; ++b; }
+    return *a == *b;
+}
 
 /* The main thread also counts towards the limit. */
-static int free_threads;
+static int threads_left;
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 typedef struct {
@@ -20,8 +75,9 @@ typedef struct {
 
 static void check_thread(int error) {
     if (error != 0) {
-        fprintf(stderr, "pthread: %s\n", strerror(error));
-        exit(EXIT_FAILURE);
+        write_text(2, "pthread error: ");
+        print_int(2, error);
+        fail("");
     }
 }
 
@@ -69,8 +125,8 @@ static void parallel_sort(ThreadArgs *args) {
     }
 
     check_thread(pthread_mutex_lock(&mutex));
-    int can_create = free_threads > 0;
-    if (can_create) --free_threads;
+    int can_create = threads_left > 0;
+    if (can_create) --threads_left;
     check_thread(pthread_mutex_unlock(&mutex));
 
     if (!can_create) {
@@ -87,69 +143,72 @@ static void parallel_sort(ThreadArgs *args) {
     parallel_sort(&second);
     check_thread(pthread_join(thread, NULL));
 
-    /* Release the slot only after the child has finished. */
-    check_thread(pthread_mutex_lock(&mutex));
-    ++free_threads;
-    check_thread(pthread_mutex_unlock(&mutex));
-
+    /* Do not reuse slots: at most P threads are created in the whole run. */
     merge(args->array, args->buffer, left, middle, right);
 }
 
 static int read_number(const char *text, int maximum) {
-    char *end;
-    errno = 0;
-    long value = strtol(text, &end, 10);
-    if (errno || end == text || *end != '\0' || value < 1 || value > maximum) {
-        fprintf(stderr, "Invalid number: %s\n", text);
-        exit(EXIT_FAILURE);
+    if (!*text) fail("Expected a positive integer");
+    int value = 0;
+    for (int i = 0; text[i]; ++i) {
+        if (text[i] < '0' || text[i] > '9') fail("Expected decimal digits");
+        int digit = text[i] - '0';
+        if (value > maximum / 10 ||
+            (value == maximum / 10 && digit > maximum % 10)) {
+            fail("Number exceeds the limit");
+        }
+        value = value * 10 + digit;
     }
-    return (int)value;
+    if (value == 0) fail("Expected a positive integer");
+    return value;
 }
 
 static double get_time(void) {
     struct timespec t;
     if (clock_gettime(CLOCK_MONOTONIC, &t) != 0) {
-        perror("clock_gettime");
-        exit(EXIT_FAILURE);
+        fail("clock_gettime failed");
     }
     return (double)t.tv_sec + (double)t.tv_nsec / 1000000000.0;
 }
 
 static void print_array(const char *name, const int *array, int n) {
-    printf("%s:", name);
-    for (int i = 0; i < n; ++i) printf(" %d", array[i]);
-    putchar('\n');
+    write_text(1, name);
+    write_text(1, ":");
+    for (int i = 0; i < n; ++i) {
+        write_text(1, " ");
+        print_int(1, array[i]);
+    }
+    write_text(1, "\n");
 }
 
 int main(int argc, char **argv) {
     if (argc < 2 || argc > 4) {
-        fprintf(stderr, "Usage: %s THREADS [SIZE] [random|sorted|reverse]\n", argv[0]);
-        return EXIT_FAILURE;
+        fail("Usage: ./merge THREADS [SIZE] [random|sorted|reverse]");
     }
-    int threads = read_number(argv[1], 256);
+    int threads = read_number(argv[1], 4096);
     int n = argc >= 3 ? read_number(argv[2], INT_MAX) : 5000000;
     const char *pattern = argc == 4 ? argv[3] : "random";
-    if (strcmp(pattern, "random") && strcmp(pattern, "sorted") && strcmp(pattern, "reverse")) {
-        fprintf(stderr, "Unknown pattern: %s\n", pattern);
-        return EXIT_FAILURE;
+    if (!equal(pattern, "random") && !equal(pattern, "sorted") && !equal(pattern, "reverse")) {
+        fail("Unknown pattern");
     }
 
-    int *sequential = calloc((size_t)n, sizeof(int));
-    int *parallel = calloc((size_t)n, sizeof(int));
-    int *buffer = calloc((size_t)n, sizeof(int));
-    if (!sequential || !parallel || !buffer) {
-        fprintf(stderr, "Not enough memory\n");
-        free(sequential);
-        free(parallel);
-        free(buffer);
-        return EXIT_FAILURE;
-    }
+    if ((size_t)n > SIZE_MAX / sizeof(int) / 3) fail("Array too large");
+    size_t bytes = (size_t)n * 3 * sizeof(int);
+    int *memory = mmap(NULL, bytes, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (memory == MAP_FAILED) fail("mmap failed");
+    int *sequential = memory;
+    int *parallel = memory + n;
+    int *buffer = parallel + n;
 
-    srand(42);
+    uint32_t state = 42;
     for (int i = 0; i < n; ++i) {
-        if (!strcmp(pattern, "sorted")) sequential[i] = i;
-        else if (!strcmp(pattern, "reverse")) sequential[i] = n - i;
-        else sequential[i] = rand() % 100000;
+        if (equal(pattern, "sorted")) sequential[i] = i;
+        else if (equal(pattern, "reverse")) sequential[i] = n - i;
+        else {
+            state = state * UINT32_C(1664525) + UINT32_C(1013904223);
+            sequential[i] = (int)(state % 100000);
+        }
         parallel[i] = sequential[i];
     }
     if (n <= 20) print_array("Before", parallel, n);
@@ -158,7 +217,7 @@ int main(int argc, char **argv) {
     merge_sort(sequential, buffer, 0, n);
     double sequential_time = get_time() - start;
 
-    free_threads = threads - 1;
+    threads_left = threads - 1;
     ThreadArgs args = {parallel, buffer, 0, n};
     start = get_time();
     parallel_sort(&args);
@@ -171,13 +230,17 @@ int main(int argc, char **argv) {
     }
     if (n <= 20) print_array("After", parallel, n);
     double speedup = parallel_time > 0 ? sequential_time / parallel_time : 0;
-    printf("Elements: %d\nThreads limit: %d\n", n, threads);
-    printf("Sequential time: %.9f s\nParallel time: %.9f s\n", sequential_time, parallel_time);
-    printf("Speedup: %.3f\nEfficiency: %.3f\n", speedup, speedup / threads);
-    printf("Check: %s\n", valid ? "OK" : "FAILED");
+    write_text(1, "Elements: "); print_int(1, n);
+    write_text(1, "\nThreads limit: "); print_int(1, threads);
+    write_text(1, "\nThreads created incl main: "); print_int(1, threads - threads_left);
+    write_text(1, "\nLogical CPUs: "); print_int(1, sysconf(_SC_NPROCESSORS_ONLN));
+    write_text(1, "\n");
+    print_value("Sequential ms: ", sequential_time * 1000);
+    print_value("Parallel ms: ", parallel_time * 1000);
+    print_value("Speedup: ", speedup);
+    print_value("Efficiency: ", speedup / threads);
+    write_text(1, valid ? "Check: OK\n" : "Check: FAILED\n");
 
-    free(sequential);
-    free(parallel);
-    free(buffer);
-    return valid ? EXIT_SUCCESS : EXIT_FAILURE;
+    if (munmap(memory, bytes) != 0) fail("munmap failed");
+    return valid ? 0 : 1;
 }

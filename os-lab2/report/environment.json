@@ -1,0 +1,20 @@
+{
+  "logical_cpus": 12,
+  "limits": [
+    1,
+    2,
+    4,
+    8,
+    12,
+    32,
+    64,
+    128
+  ],
+  "repeats": 3,
+  "cpu_model": "13th Gen Intel(R) Core(TM) i5-13420H",
+  "platform": "Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "compiler": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "clock": "CLOCK_MONOTONIC",
+  "unit": "ms",
+  "sequential_first": true
+}

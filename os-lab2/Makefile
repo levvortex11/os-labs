@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror
+CFLAGS = -std=c11 -O2 -fno-builtin -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror
 
 merge: merge.c
 	$(CC) $(CFLAGS) -pthread $< -o $@
