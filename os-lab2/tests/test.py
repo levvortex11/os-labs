@@ -1,14 +1,23 @@
-import random
+import os
 import subprocess
+import tempfile
+from pathlib import Path
 
-random.seed(42)
-cases = [[], [1], [3, 1, 2, 1, -4], [2147483647, -2147483648, 0], list(range(129)), list(range(127, -1, -1))]
-cases += [[random.randint(-100, 100) for _ in range(n)] for n in (2, 3, 31, 128, 999, 10000)]
+with tempfile.TemporaryDirectory() as tmp:
+    binary = str(Path(tmp) / 'sort_test')
+    subprocess.run([os.environ.get('CC', 'gcc'), '-std=c11', '-O2', '-Wall', '-Wextra', '-Wpedantic', '-Wconversion', '-Wshadow', '-Werror', '-pthread', 'tests/sort_test.c', '-o', binary], check=True)
+    subprocess.run([binary], check=True)
+
+checks = 0
 for threads in (1, 2, 3, 8):
-    for a in cases:
-        data = f'{len(a)}\n' + ' '.join(map(str, a)) + '\n'
-        p = subprocess.run(['./merge', '--threads', str(threads)], input=data, text=True, capture_output=True, check=True)
-        assert list(map(int, p.stdout.split())) == sorted(a), (threads, a)
-for args, data in [(['--threads', '0'], ''), (['--threads', '257'], ''), ([], '2\n1\n'), (['--pattern', 'bad'], '0\n')]:
-    assert subprocess.run(['./merge', *args], input=data, text=True, capture_output=True).returncode != 0
-print(f'{len(cases) * 4 + 4} checks passed')
+    for pattern in ('random', 'sorted', 'reverse'):
+        p = subprocess.run(['./merge', str(threads), '19', pattern], capture_output=True, text=True, check=True)
+        before = list(map(int, p.stdout.split('Before:')[1].splitlines()[0].split()))
+        after = list(map(int, p.stdout.split('After:')[1].splitlines()[0].split()))
+        assert after == sorted(before)
+        assert 'Check: OK' in p.stdout
+        checks += 1
+for args in ([], ['0'], ['-1'], ['257'], ['abc'], ['4', '0'], ['4', '-1'], ['4', '999999999999999999999999'], ['4', '100', 'bad'], ['4', '1', 'random', 'extra']):
+    assert subprocess.run(['./merge', *args], capture_output=True).returncode != 0
+    checks += 1
+print(f'{checks} CLI checks passed')

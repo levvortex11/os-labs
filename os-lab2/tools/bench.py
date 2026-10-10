@@ -4,22 +4,20 @@ import statistics
 import subprocess
 from pathlib import Path
 
-out = Path('report/measurements.csv')
-with out.open('w', newline='', encoding='utf-8') as f:
-    writer = csv.writer(f)
-    writer.writerow(['size', 'pattern', 'threads', 'seconds_median', 'speedup', 'efficiency', 'runs_seconds'])
+with Path('report/measurements.csv').open('w', newline='', encoding='utf-8') as f:
+    writer = csv.writer(f, lineterminator='\n')
+    writer.writerow(['size', 'pattern', 'threads', 'sequential_median', 'parallel_median', 'speedup', 'efficiency', 'sequential_runs', 'parallel_runs'])
     for n in (10000, 1000000, 5000000):
         for pattern in ('random', 'sorted', 'reverse'):
-            baseline = None
             for threads in (1, 2, 4, 8):
-                runs = []
+                sequential = []
+                parallel = []
                 for _ in range(3):
-                    p = subprocess.run(['./merge', '--size', str(n), '--pattern', pattern, '--seed', '42', '--threads', str(threads), '--quiet'], capture_output=True, text=True, check=True)
-                    runs.append(float(re.search(r'seconds=([\d.]+)', p.stderr).group(1)))
-                t = statistics.median(runs)
-                if baseline is None:
-                    baseline = t
-                speedup = baseline / t
-                writer.writerow([n, pattern, threads, f'{t:.6f}', f'{speedup:.3f}', f'{speedup / threads:.3f}', ';'.join(map(str, runs))])
+                    p = subprocess.run(['./merge', str(threads), str(n), pattern], capture_output=True, text=True, check=True)
+                    sequential.append(float(re.search(r'Sequential time: ([\d.]+)', p.stdout).group(1)))
+                    parallel.append(float(re.search(r'Parallel time: ([\d.]+)', p.stdout).group(1)))
+                t1, tp = statistics.median(sequential), statistics.median(parallel)
+                speedup = t1 / tp
+                writer.writerow([n, pattern, threads, f'{t1:.9f}', f'{tp:.9f}', f'{speedup:.3f}', f'{speedup / threads:.3f}', ';'.join(map(str, sequential)), ';'.join(map(str, parallel))])
                 f.flush()
-                print(n, pattern, threads, f'{t:.6f}', flush=True)
+                print(n, pattern, threads, f'S={speedup:.3f}', flush=True)
